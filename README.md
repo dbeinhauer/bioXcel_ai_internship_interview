@@ -18,8 +18,6 @@ docker run compound-normalizer
 
 
 ## Repository Structure
-- `compound_data.xlsx`: Contains additional compound properties for the bonus task.
 - `Dockerfile`: Docker configuration file for building the container.
 - `name_normalization.py`: Python source code of the task solution.
 - `requirements.txt`: List of required Python packages.
-- `variants_mapping.json`: JSON template for name normalization.

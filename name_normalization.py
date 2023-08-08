@@ -1,85 +1,107 @@
 #!/usr/bin/env python3
 
-import json
 import pandas as pd
+import pubchempy as pcp
+
+# Solution description (including the Bonus part):
+# We have decided to normalize compound names and enrich them with additional properties
+# using PubChem databasis. As the normalized form we have decided to choose uppercase 
+# variant of the first synonym of the first match of the original form name from the databasis.
+# As the additional properties, we have decided to take only molecular weight, smiles and logP.
+# Note that the code design allows to expand the list of properties with ease.
+# We have decided to rank the compounds only by the molecular weight. We expect that in the real
+# life example there would be more complex scoring function based on the number of compound 
+# properties. In our example, we have not include any categorical properties, but the desing
+# does not limit its usage in the future.
+
+class CompoundProcessor:
+
+    # Table header content strings:
+    ORG_FORM_NAME = 'org_form'
+    NORMED_FORM_NAME = 'normed_form'
+    MOLECULAR_WEIGHT_NAME = 'molecular_weight'
+    SMILES_NAME = 'smiles'
+    LOGP_NAME = 'logP'
+
+        
+    def process_input(self, variants_input : list) -> tuple:
+        """Normalize compound names and add additional properties.
+
+        This function normalizes compound names and extracts additional properties 
+        from PubChem database.
+        
+        Args:
+            variants_input (list): List of compound names to be processed.
+
+        Returns:
+            tuple: A tuple containing two pd.DataFrames:
+                   - DataFrame with mapping of original compound names to normalized forms.
+                   - DataFrame with normalized compounds and their properties.
+        """
+
+        # In order to reduce the number of requests to PubChem databasis we normalize and
+        # add properties at once.
+
+        processed_data = []
+        org_norm_mapping = {}
+
+        # For fast checking whether the properties of the normalized compound are already added. 
+        normed_formes_set = set()
+
+        for name in variants_input:
+            pubchem_compounds = pcp.get_compounds(name, 'name')
+
+            if pubchem_compounds:
+                # Compound found -> take the first matching variant.
+                compound = pubchem_compounds[0]
+
+                # Normalized form it the first synonym in uppercase.
+                normed_form_name = compound.synonyms[0].upper()
+                org_norm_mapping[name] = normed_form_name
+
+                # Compound already processed -> skip properties addition.
+                if normed_form_name in normed_formes_set:
+                    continue
+
+                normed_formes_set.add(normed_form_name)
+
+                # Add properties of the compound.
+                processed_data.append({
+                    CompoundProcessor.NORMED_FORM_NAME : normed_form_name,
+                    CompoundProcessor.MOLECULAR_WEIGHT_NAME : compound.molecular_weight,
+                    CompoundProcessor.SMILES_NAME : compound.isomeric_smiles,
+                    CompoundProcessor.LOGP_NAME : compound.xlogp,
+                })
+            else:
+                # Compound not found:
+                # In our case we just print the message to stdout. In real life example, 
+                # we should use better way to inform the user about job failure.
+                print("Compound not found!")
 
 
-# Name Normalization:
+        org_norm_mapping = pd.DataFrame(
+            list(org_norm_mapping.items()), 
+            columns=[
+                CompoundProcessor.ORG_FORM_NAME,  
+                CompoundProcessor.NORMED_FORM_NAME
+                ]
+            )
+        
+        compound_properties = pd.DataFrame(processed_data).astype(
+            {
+                CompoundProcessor.NORMED_FORM_NAME : 'str',
+                CompoundProcessor.MOLECULAR_WEIGHT_NAME: 'float',
+                CompoundProcessor.SMILES_NAME : 'str',
+                CompoundProcessor.LOGP_NAME : 'float',
+            }
+        )
 
-# In order to normalize the compound names we have decided to use the dictionary 
-# of the `normed_form : [variants]` key:value pairs stored in the separed JSON file.
-# Alternatively, it might be possible to use dictionary of the `variant : normed_form`
-# pairs or even other aproach based on the more specific task description.
-
-
-def normalize_name(compound_name : str, normed_forms) -> str:
-    """Normalize compound name.
-
-    This function normalizes the compound name based on the
-    given template.
-
-    Args:
-        compound_name (str): Name to be normalized.
-        normed_forms : Template for name normalization.
-
-    Returns:
-        str: The normalized compound name.
-    """
-
-    # In order to normalize compound name, we just run through all possible 
-    # variants and find the maching normalized form.
-
-    for normed, variations in normed_forms.items():
-        if compound_name in variations:
-            return normed
-
-    # Normalized variant not found.
-    return compound_name
-            
-
-def normalize_input(variants_input : list, mapping_filename="variants_mapping.json") -> pd.DataFrame:
-    """Normalize all given compound names.
-
-    Args:
-        variants_input (list): Names to be normalized
-        mapping_filename (str, optional): Name of the file containg template for name 
-        normalization. Defaults to "variants_mapping.json".
-
-    Returns:
-        pd.Dataframe: Normalized compound names from the `variants_input`.
-    """
-
-    # Load template for normalization.
-    with open(mapping_filename, 'r') as variants_file:
-        variants_mapping = json.load(variants_file)
-
-    return pd.DataFrame(
-        {
-            'org_form': variants_input, 
-            'normed_form': [normalize_name(name, variants_mapping) for name in variants_input]
-        }
-    )   
-
-
-# Bonus Part - Enriching Data and Ranking
-
-# In order to solve the bonus part, we have prepared the simplified version of the
-# excel file for the demonstration of the solution. The file only contains normed name 
-# and molecular weight of the compounds. Note that because of the simplification 
-# the file does not contain all of the specified feature variants (contains only
-# numerical features). The missing parameter types would have the biggest impact on the
-# ranking, where it might be neccesary to properly design the score function based on the
-# parameter types. In our example, we just ranked the compounds based on their
-# molecular weights.
-
-
-def load_compound_data(compound_data_filename="compound_data.xlsx") -> pd.DataFrame:
-    """Load additional compound properties."""
-
-    # If working with the more complex dataset it would be probably necessary
-    # to preprocess the data more profoundly.
-
-    return pd.read_excel(compound_data_filename)
+        return org_norm_mapping, compound_properties
+    
+    
+def save_processed_input(processed_data, filename='compound_data.xlsx'):
+    """Save processed data into the excel file."""
+    processed_data.to_excel(filename, index=False)
 
 
 def compound_score(compound_data : pd.DataFrame) -> float:
@@ -99,7 +121,7 @@ def compound_score(compound_data : pd.DataFrame) -> float:
     # example we would probably use more complex scoring function combining the 
     # properties (and probably dealing with different types of the features).
 
-    return compound_data["molecular_weight"]
+    return compound_data[CompoundProcessor.MOLECULAR_WEIGHT_NAME]
 
 
 def rank_data(compound_data : pd.DataFrame, enriched_filename="enriched_compound_data.xlsx"):
@@ -121,14 +143,12 @@ def rank_data(compound_data : pd.DataFrame, enriched_filename="enriched_compound
 
     # If we want to maintain the `score` property -> store it to the specified file. 
     if enriched_filename:
-        additional_info = compound_data[['normed_form', 'score']]
+        additional_info = compound_data[[CompoundProcessor.NORMED_FORM_NAME, 'score']]
         additional_info.to_excel(enriched_filename, index=False)
 
 
-
-# Call the functions.
+# Example usage
 if __name__ == "__main__":
-    # Input specified in the task assignment.
     variants_input = [
         "Adenosine",
         "Adenocard",
@@ -139,22 +159,20 @@ if __name__ == "__main__":
         "ibrutinib",
         "PC-32765",
     ]
-
-
-    # Name Normalization: 
-    # Normalize and print the compound names. 
+    
+    # Name normalization and properties addition.
+    processor = CompoundProcessor()
+    mapping, processed_data = processor.process_input(variants_input)
     print("Name normalization:")
     print("-----------------------------")
-    print(normalize_input(variants_input))
+    print(mapping)
     print()
 
-
-    # Bonus Part - Enriching Data and Ranking
-    # Assuming you have a data file 'compound_data.xlsx' containing additional properties.
-    # Load the additional data, rank them and print the ranked data.
-    compound_data = load_compound_data("compound_data.xlsx")
-    rank_data(compound_data)
+    # Save additional properties into the excel file.
+    save_processed_input(processed_data)
+    # Rank the data.
+    rank_data(processed_data)#, enriched_filename=None)
 
     print("Bonus Part - Enriching Data and Ranking")
     print("-----------------------------")
-    print(compound_data)
+    print(processed_data)
